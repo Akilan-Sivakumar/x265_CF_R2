@@ -1,9 +1,6 @@
 name: CI
 
-run-name: >-
-  ${{ github.event_name == 'schedule' && 'CI — Scheduled (4am IST)'
-   || github.event_name == 'pull_request' && format('CI — PR #{0} ({1})', github.event.number, github.head_ref)
-   || format('CI — Push to {0} ({1})', github.ref_name, github.sha) }}
+run-name: ${{ github.event_name == 'schedule' && 'Scheduled Run' || github.event.head_commit.message || github.sha }}
 
 on:
   push:
