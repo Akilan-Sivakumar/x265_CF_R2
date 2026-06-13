@@ -892,8 +892,9 @@ uint64_t Analysis::compressIntraCU(const CUData& parentCTU, const CUGeom& cuGeom
 #endif
 
     // stop recursion if we reach the depth of previous analysis decision
-    mightSplit &= !(bAlreadyDecided && bDecidedDepth && bUseDepthInfo) || split;
-
+    mightSplit &= !(bAlreadyDecided && bDecidedDepth) || split;
+    if((m_param->analysisLoadReuseLevel == 2) && bUseDepthInfo)
+        mightSplit = false;
     if (mightSplit)
     {
         Mode* splitPred = &md.pred[PRED_SPLIT];
