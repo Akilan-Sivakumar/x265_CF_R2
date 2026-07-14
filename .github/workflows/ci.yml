@@ -110,7 +110,7 @@ jobs:
           R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
         run: |
           aws configure set default.s3.multipart_chunksize 256MB
-          aws s3 cp s3://x265-assets/tsan/tsan-videos.tar.gz . --endpoint-url "$R2_ENDPOINT"
+          aws s3 cp s3://x265-tsan-assets/tsan/tsan-videos.tar.gz . --endpoint-url "$R2_ENDPOINT"
           echo "[OK] bundle fetched: $(du -h tsan-videos.tar.gz)"
 
       - name: Upload video bundle
