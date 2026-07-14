@@ -1,9 +1,8 @@
 name: X265 CI - TSAN
 
-run-name: ${{ github.event.pull_request.title || github.event.head_commit.message || 'Manual run' }}
+run-name: ${{ github.event.pull_request.title || 'Manual run' }}
 
 on:
-  push:
   pull_request_target:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
