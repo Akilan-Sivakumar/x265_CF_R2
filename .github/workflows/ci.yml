@@ -22,11 +22,14 @@ defaults:
     shell: bash
 
 jobs:
-  build-tsan:
-    name: "Build TSAN"
+  build-tsan-8bit:
+    name: "Build TSAN 8-bit"
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
+      # On pull_request_target, check out the PR merged into master
+      # (refs/pull/N/merge) so PR changes are actually built and tested;
+      # plain pushes build their own commit.
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
@@ -36,8 +39,8 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.ccache
-          key: ccache-tsan-${{ runner.os }}-${{ github.sha }}
-          restore-keys: ccache-tsan-${{ runner.os }}-
+          key: ccache-tsan-8bit-${{ runner.os }}-${{ github.sha }}
+          restore-keys: ccache-tsan-8bit-${{ runner.os }}-
 
       - name: Cache apt packages
         uses: actions/cache@v5
@@ -60,10 +63,10 @@ jobs:
           mkdir -p /home/runner/apt-archives
           cp -n /var/cache/apt/archives/*.deb /home/runner/apt-archives/ 2>/dev/null || true
 
-      - name: Build (TSAN instrumented)
+      - name: Build (TSAN instrumented, 8-bit)
         run: |
           export PATH="/usr/lib/ccache:$PATH"
-          mkdir -p build/tsan && cd build/tsan
+          mkdir -p build/tsan-8bit && cd build/tsan-8bit
           cmake ../../source \
             -DCMAKE_C_COMPILER=clang-18 \
             -DCMAKE_CXX_COMPILER=clang++-18 \
@@ -71,31 +74,105 @@ jobs:
             -DCMAKE_CXX_FLAGS="-fsanitize=thread -g -O1" \
             -DENABLE_SHARED=OFF
           make -j$(nproc)
-          test -f x265 && echo "TSAN CLI binary OK"
+          test -f x265 && echo "TSAN 8-bit CLI binary OK"
           ./x265 --version
 
       - name: Verify TSAN instrumentation
         run: |
-          if nm build/tsan/x265 2>/dev/null | grep -q '__tsan_init' \
-             || strings build/tsan/x265 | grep -q 'ThreadSanitizer'; then
+          # If ccache served a stale non-TSAN object set, or flags were
+          # dropped, the binary silently has no instrumentation and every
+          # test would report "Clean". Fail the build instead.
+          if nm build/tsan-8bit/x265 2>/dev/null | grep -q '__tsan_init' \
+             || strings build/tsan-8bit/x265 | grep -q 'ThreadSanitizer'; then
             echo "[OK] Binary is TSAN-instrumented"
           else
-            echo "::error::x265 binary is NOT TSAN-instrumented!"
+            echo "::error::x265 8-bit binary is NOT TSAN-instrumented!"
             exit 1
           fi
 
       - name: Upload CLI binary
         uses: actions/upload-artifact@v7
         with:
-          name: x265-tsan
-          path: build/tsan/x265
+          name: x265-tsan-8bit
+          path: build/tsan-8bit/x265
           retention-days: 3
 
-  # Trusted job: the ONLY place R2 credentials are referenced. Never checks
-  # out or executes PR code, so a malicious PR cannot reach these secrets —
-  # the job boundary (fresh VM per job) is the real isolation in Actions.
-  # Pulls the bundle fresh from R2 every run; the artifact is just the
-  # courier to test-tsan, not a cache. Token is READ-ONLY, bucket-scoped.
+  build-tsan-10bit:
+    name: "Build TSAN 10-bit"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      # On pull_request_target, check out the PR merged into master
+      # (refs/pull/N/merge) so PR changes are actually built and tested;
+      # plain pushes build their own commit.
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'pull_request_target' && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.sha }}
+
+      - name: Cache ccache
+        uses: actions/cache@v5
+        with:
+          path: ~/.ccache
+          key: ccache-tsan-10bit-${{ runner.os }}-${{ github.sha }}
+          restore-keys: ccache-tsan-10bit-${{ runner.os }}-
+
+      - name: Cache apt packages
+        uses: actions/cache@v5
+        with:
+          path: /home/runner/apt-archives
+          key: apt-build-tsan-${{ runner.os }}-v1
+          restore-keys: apt-build-tsan-${{ runner.os }}-v1
+      - name: Pre-populate apt cache
+        run: sudo cp /home/runner/apt-archives/*.deb /var/cache/apt/archives/ 2>/dev/null || true
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential cmake nasm ccache libnuma-dev clang
+          clang --version
+
+      - name: Prepare apt cache
+        if: always()
+        run: |
+          mkdir -p /home/runner/apt-archives
+          cp -n /var/cache/apt/archives/*.deb /home/runner/apt-archives/ 2>/dev/null || true
+
+      - name: Build (TSAN instrumented, 10-bit)
+        run: |
+          export PATH="/usr/lib/ccache:$PATH"
+          mkdir -p build/tsan-10bit && cd build/tsan-10bit
+          cmake ../../source \
+            -DCMAKE_C_COMPILER=clang-18 \
+            -DCMAKE_CXX_COMPILER=clang++-18 \
+            -DCMAKE_C_FLAGS="-fsanitize=thread -g -O1" \
+            -DCMAKE_CXX_FLAGS="-fsanitize=thread -g -O1" \
+            -DHIGH_BIT_DEPTH=ON \
+            -DENABLE_SHARED=OFF
+          make -j$(nproc)
+          test -f x265 && echo "TSAN 10-bit CLI binary OK"
+          ./x265 --version
+
+      - name: Verify TSAN instrumentation
+        run: |
+          # If ccache served a stale non-TSAN object set, or flags were
+          # dropped, the binary silently has no instrumentation and every
+          # test would report "Clean". Fail the build instead.
+          if nm build/tsan-10bit/x265 2>/dev/null | grep -q '__tsan_init' \
+             || strings build/tsan-10bit/x265 | grep -q 'ThreadSanitizer'; then
+            echo "[OK] Binary is TSAN-instrumented"
+          else
+            echo "::error::x265 10-bit binary is NOT TSAN-instrumented!"
+            exit 1
+          fi
+
+      - name: Upload CLI binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: x265-tsan-10bit
+          path: build/tsan-10bit/x265
+          retention-days: 3
+          
   prepare-tsan-assets:
     name: "Prepare TSAN Test Assets"
     runs-on: ubuntu-latest
@@ -109,7 +186,8 @@ jobs:
           R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
         run: |
           aws configure set default.s3.multipart_chunksize 256MB
-          aws s3 cp s3://x265-tsan-assets/tsan/tsan-videos.tar.gz . --endpoint-url "$R2_ENDPOINT"
+          aws s3 cp s3://x265-tsan-assets/tsan/tsan-videos.tar.gz . \
+            --endpoint-url "$R2_ENDPOINT" --no-progress
           echo "[OK] bundle fetched: $(du -h tsan-videos.tar.gz)"
 
       - name: Upload video bundle
@@ -125,17 +203,32 @@ jobs:
     name: "Test TSAN - Threading Race Detection"
     runs-on: ubuntu-24.04
     timeout-minutes: 120
-    needs: [build-tsan, prepare-tsan-assets]
+    needs: [build-tsan-8bit, build-tsan-10bit, prepare-tsan-assets]
+    # Run only when both TSAN builds passed AND code-quality passed.
+    # code-quality only exists on pull_request_target (skipped on
+    # push/dispatch), so 'skipped' is accepted to keep TSAN running on
+    # non-PR events.
+    if: |
+      always() &&
+      needs.build-tsan-8bit.result == 'success' &&
+      needs.build-tsan-10bit.result == 'success' &&
+      needs.prepare-tsan-assets.result == 'success'
     steps:
-      - name: Download TSAN binary
+      - name: Download TSAN 8-bit binary
         uses: actions/download-artifact@v8
         with:
-          name: x265-tsan
-          path: dist
+          name: x265-tsan-8bit
+          path: dist-8bit
 
-      # Videos arrive from the trusted prepare-tsan-assets job. This job
-      # references NO secrets anywhere, because it executes the PR-built
-      # binary — nothing here for a malicious PR to steal.
+      - name: Download TSAN 10-bit binary
+        uses: actions/download-artifact@v8
+        with:
+          name: x265-tsan-10bit
+          path: dist-10bit
+
+      # Videos come pre-downloaded from the trusted prepare-tsan-assets job.
+      # No secrets are referenced anywhere in this job, because it executes
+      # the PR-built binaries.
       - name: Download TSAN video bundle
         uses: actions/download-artifact@v8
         with:
@@ -150,10 +243,17 @@ jobs:
 
       - name: Run TSAN regression tests
         run: |
-          chmod +x dist/x265
-          X265=$(pwd)/dist/x265
+          chmod +x dist-8bit/x265 dist-10bit/x265
+          X265_8=$(pwd)/dist-8bit/x265
+          X265_10=$(pwd)/dist-10bit/x265
           VID=$(pwd)/tsan-videos
           mkdir -p tsan-logs
+          # No log_path: TSAN reports go to stderr, interleaved with the
+          # encoder's own output — warnings appear mid-encode, between the
+          # frame progress lines, same as on a local terminal. The complete
+          # console output of each test (encoding log + TSAN warnings) is
+          # captured into ONE file under tsan-logs/, which is then analyzed
+          # for warnings and always uploaded as an artifact.
           export TSAN_OPTIONS="halt_on_error=0:history_size=7"
           echo "TSAN_OPTIONS=$TSAN_OPTIONS"
           FAIL=0
@@ -166,14 +266,18 @@ jobs:
             echo ""
             echo "=== $label — log: $logfile ==="
             local start_ts=$SECONDS
+            # Full console output (stdout + stderr) streams to the Actions
+            # log AND into the per-test log file.
             "$@" 2>&1 | tee "$logfile" || true
             local rc=${PIPESTATUS[0]:-0}
-            echo "[debug] exit code: $rc | duration: $((SECONDS - start_ts))s"
+            echo "[debug] exit code: $rc (TSAN default is 66 when races were reported) | duration: $((SECONDS - start_ts))s"
+            # ── Analyze the captured console log ──
             local n
             n=$(grep -c "WARNING: ThreadSanitizer" "$logfile" || true)
             n=${n:-0}
             if [ "$n" -gt 0 ]; then
               echo "[TSAN] !! RESULT $label: RACE DETECTED ($n warnings)"
+              echo "[TSAN] Unique race sites (count | summary):"
               grep "SUMMARY: ThreadSanitizer" "$logfile" | sort | uniq -c | sort -rn || true
               echo "| \`$label\` | RACE DETECTED ($n warnings) |" >> /tmp/tsan_results.log
               FAIL=$((FAIL+1))
@@ -182,28 +286,35 @@ jobs:
               echo "| \`$label\` | Clean |" >> /tmp/tsan_results.log
             fi
           }
-          run_tsan "ultrafast RaceHorses_10bit" \
-            $X265 --preset ultrafast --tune psnr --limit-refs 1 --no-info --hash=1 --psnr --ssim \
-                  --input-res=416x240 --input-depth=10 --input-csp=i420 --fps=30 --csv /tmp/out1.csv \
-                  -o /tmp/out1.hevc "$VID/RaceHorses_416x240_30_10bit.yuv"
-          run_tsan "superfast mobile_calendar" \
-            $X265 --preset superfast --weightp --no-info --hash=1 --psnr --ssim --log-level=full --csv /tmp/out2.csv \
+          # ── 8-bit build: 4 y4m clips (4:2:0 / 4:2:2 / 4:4:4, CIF → 720p50),
+          #    presets ultrafast / medium / slow / veryslow ──
+          run_tsan "8bit ultrafast ducks_take_off" \
+            $X265_8 --preset ultrafast --constrained-intra --rd 1 --no-info --hash=1 --psnr --ssim --csv /tmp/out1.csv \
+                  -o /tmp/out1.hevc "$VID/ducks_take_off_420_720p50.y4m"
+          run_tsan "8bit medium mobile_calendar" \
+            $X265_8 --preset medium --bitrate 500 -F4 --no-info --hash=1 --psnr --ssim --log-level=full --csv /tmp/out2.csv \
                   -o /tmp/out2.hevc "$VID/mobile_calendar_422_ntsc.y4m"
-          run_tsan "medium silent_cif" \
-            $X265 --preset medium --me full --rect --amp --no-info --hash=1 --psnr --ssim --csv /tmp/out3.csv \
-                  -o /tmp/out3.hevc "$VID/silent_cif_420.y4m"
-          run_tsan "slow BasketballDrive" \
-            $X265 --preset slow --nr-intra 100 -F4 --aq-strength 3 --qg-size 16 --limit-refs 1 \
-                  --no-info --hash=1 --psnr --ssim --csv /tmp/out4.csv \
-                  -o /tmp/out4.hevc "$VID/BasketballDrive_1920x1080_50.y4m"
-          run_tsan "veryslow RaceHorses" \
-            $X265 --preset veryslow --tskip-fast --tskip --limit-refs 3 --limit-tu 3 \
-                  --no-info --hash=1 --psnr --ssim --csv /tmp/out5.csv \
-                  -o /tmp/out5.hevc "$VID/RaceHorses_416x240_30.y4m"
+          run_tsan "8bit slow old_town_cross" \
+            $X265_8 --preset slow --rdoq-level 1 --early-skip --ref 7 --no-b-pyramid \
+                  --no-info --hash=1 --psnr --ssim --csv /tmp/out3.csv \
+                  -o /tmp/out3.hevc "$VID/old_town_cross_444_720p50.y4m"
+          run_tsan "8bit veryslow silent_cif" \
+            $X265_8 --preset veryslow --me sea --no-info --hash=1 --psnr --ssim --log-level=debug --csv /tmp/out4.csv \
+                  -o /tmp/out4.hevc "$VID/silent_cif_420.y4m"
+          # ── 10-bit build: native 10-bit input, veryfast rung ──
+          run_tsan "10bit veryfast RaceHorses_10bit" \
+            $X265_10 --preset veryfast --weightb --no-info --hash=1 --psnr --ssim \
+                  --input-res=416x240 --input-depth=10 --input-csp=i420 --fps=30 --csv /tmp/out5.csv \
+                  -o /tmp/out5.hevc "$VID/RaceHorses_416x240_30_10bit.yuv"
           rm -f /tmp/out*.hevc /tmp/out*.csv
           echo ""
           echo "=== Captured console logs ==="
           ls -la tsan-logs/ || true
+          total_warnings=$(cat tsan-logs/*.log 2>/dev/null | grep -c "WARNING: ThreadSanitizer" || true)
+          echo "Total TSAN warnings across all logs: ${total_warnings:-0}"
+          echo ""
+          echo "=== Unique race sites across all logs ==="
+          grep -h "SUMMARY: ThreadSanitizer" tsan-logs/*.log 2>/dev/null | sort | uniq -c | sort -rn || true
           echo ""
           echo "=== TSAN Results FAIL=$FAIL ==="
           mkdir -p summaries && cp /tmp/tsan_results.log summaries/tsan.log 2>/dev/null || true
@@ -224,8 +335,24 @@ jobs:
             else
               echo "| _no data_ | - |"
             fi
+            echo ""
+            if ls tsan-logs/*.log >/dev/null 2>&1; then
+              sites=$(grep -h "SUMMARY: ThreadSanitizer" tsan-logs/*.log 2>/dev/null | sort | uniq -c | sort -rn || true)
+              if [ -n "$sites" ]; then
+                echo "<details><summary>Unique race sites</summary>"
+                echo ""
+                echo '```'
+                echo "$sites"
+                echo '```'
+                echo ""
+                echo "</details>"
+                echo ""
+              fi
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # Always store the full console logs (encoding output + interleaved
+      # TSAN warnings), pass or fail.
       - name: Upload console logs
         if: always()
         uses: actions/upload-artifact@v7
@@ -234,3 +361,11 @@ jobs:
           path: tsan-logs/*.log
           if-no-files-found: ignore
           retention-days: 7
+
+      - name: Upload summaries
+        if: always() && github.event_name != 'pull_request_target'
+        uses: actions/upload-artifact@v7
+        with:
+          name: summaries-tsan
+          path: summaries/*.log
+          retention-days: 3
